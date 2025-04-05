@@ -5,17 +5,17 @@
 
 from __future__ import annotations
 
-import math
 import torch
-from collections.abc import Sequence
-
+import gymnasium as gym
+import numpy as np
 import isaaclab.sim as sim_utils
 from isaaclab.assets import Articulation
 from isaaclab.envs import DirectRLEnv
 from isaaclab.sim.spawners.from_files import GroundPlaneCfg, spawn_ground_plane
-from isaaclab.utils.math import sample_uniform
+from isaaclab.utils.math import sample_uniform, quat_rotate
 
 from .isaaclab_humanoid_amp_env_cfg import IsaaclabHumanoidAmpEnvCfg
+from .motions import MotionLoader
 
 
 class IsaaclabHumanoidAmpEnv(DirectRLEnv):
@@ -24,16 +24,43 @@ class IsaaclabHumanoidAmpEnv(DirectRLEnv):
     def __init__(self, cfg: IsaaclabHumanoidAmpEnvCfg, render_mode: str | None = None, **kwargs):
         super().__init__(cfg, render_mode, **kwargs)
 
-        self._cart_dof_idx, _ = self.robot.find_joints(self.cfg.cart_dof_name)
-        self._pole_dof_idx, _ = self.robot.find_joints(self.cfg.pole_dof_name)
+        # action offset and scale
+        dof_lower_limits = self.robot.data.soft_joint_pos_limits[0, :, 0]
+        dof_upper_limits = self.robot.data.soft_joint_pos_limits[0, :, 1]
+        self.action_offset = 0.5 * (dof_upper_limits + dof_lower_limits)
+        self.action_scale = dof_upper_limits - dof_lower_limits
 
-        self.joint_pos = self.robot.data.joint_pos
-        self.joint_vel = self.robot.data.joint_vel
+        # load motion
+        self._motion_loader = MotionLoader(motion_file=self.cfg.motion_file, device=self.device)
+
+        # DOF and key body indexes
+        key_body_names = ["right_hand", "left_hand", "right_foot", "left_foot"]
+        self.ref_body_index = self.robot.data.body_names.index(self.cfg.reference_body)
+        self.key_body_indexes = [self.robot.data.body_names.index(name) for name in key_body_names]
+        self.motion_dof_indexes = self._motion_loader.get_dof_index(self.robot.data.joint_names)
+        self.motion_ref_body_index = self._motion_loader.get_body_index([self.cfg.reference_body])[0]
+        self.motion_key_body_indexes = self._motion_loader.get_body_index(key_body_names)
+
+        # reconfigure AMP observation space according to the number of observations and create the buffer
+        self.amp_observation_size = self.cfg.num_amp_observations * self.cfg.amp_observation_space
+        self.amp_observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(self.amp_observation_size,))
+        self.amp_observation_buffer = torch.zeros(
+            (self.num_envs, self.cfg.num_amp_observations, self.cfg.amp_observation_space), device=self.device
+        )
 
     def _setup_scene(self):
-        self.robot = Articulation(self.cfg.robot_cfg)
+        self.robot = Articulation(self.cfg.robot)
         # add ground plane
-        spawn_ground_plane(prim_path="/World/ground", cfg=GroundPlaneCfg())
+        spawn_ground_plane(
+            prim_path="/World/ground",
+            cfg=GroundPlaneCfg(
+                physics_material=sim_utils.RigidBodyMaterialCfg(
+                    static_friction=1.0,
+                    dynamic_friction=1.0,
+                    restitution=0.0,
+                ),
+            ),
+        )
         # clone and replicate
         self.scene.clone_environments(copy_from_source=False)
         # add articulation to scene
@@ -42,91 +69,169 @@ class IsaaclabHumanoidAmpEnv(DirectRLEnv):
         light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
         light_cfg.func("/World/Light", light_cfg)
 
-    def _pre_physics_step(self, actions: torch.Tensor) -> None:
+    def _pre_physics_step(self, actions: torch.Tensor):
         self.actions = actions.clone()
 
-    def _apply_action(self) -> None:
-        self.robot.set_joint_effort_target(self.actions * self.cfg.action_scale, joint_ids=self._cart_dof_idx)
+    def _apply_action(self):
+        target = self.action_offset + self.action_scale * self.actions
+        self.robot.set_joint_position_target(target)
 
     def _get_observations(self) -> dict:
-        obs = torch.cat(
-            (
-                self.joint_pos[:, self._pole_dof_idx[0]].unsqueeze(dim=1),
-                self.joint_vel[:, self._pole_dof_idx[0]].unsqueeze(dim=1),
-                self.joint_pos[:, self._cart_dof_idx[0]].unsqueeze(dim=1),
-                self.joint_vel[:, self._cart_dof_idx[0]].unsqueeze(dim=1),
-            ),
-            dim=-1,
+        # build task observation
+        obs = compute_obs(
+            self.robot.data.joint_pos,
+            self.robot.data.joint_vel,
+            self.robot.data.body_pos_w[:, self.ref_body_index],
+            self.robot.data.body_quat_w[:, self.ref_body_index],
+            self.robot.data.body_lin_vel_w[:, self.ref_body_index],
+            self.robot.data.body_ang_vel_w[:, self.ref_body_index],
+            self.robot.data.body_pos_w[:, self.key_body_indexes],
         )
-        observations = {"policy": obs}
-        return observations
+
+        # update AMP observation history
+        for i in reversed(range(self.cfg.num_amp_observations - 1)):
+            self.amp_observation_buffer[:, i + 1] = self.amp_observation_buffer[:, i]
+        # build AMP observation
+        self.amp_observation_buffer[:, 0] = obs.clone()
+        self.extras = {"amp_obs": self.amp_observation_buffer.view(-1, self.amp_observation_size)}
+
+        return {"policy": obs}
 
     def _get_rewards(self) -> torch.Tensor:
-        total_reward = compute_rewards(
-            self.cfg.rew_scale_alive,
-            self.cfg.rew_scale_terminated,
-            self.cfg.rew_scale_pole_pos,
-            self.cfg.rew_scale_cart_vel,
-            self.cfg.rew_scale_pole_vel,
-            self.joint_pos[:, self._pole_dof_idx[0]],
-            self.joint_vel[:, self._pole_dof_idx[0]],
-            self.joint_pos[:, self._cart_dof_idx[0]],
-            self.joint_vel[:, self._cart_dof_idx[0]],
-            self.reset_terminated,
-        )
-        return total_reward
+        return torch.ones((self.num_envs,), dtype=torch.float32, device=self.sim.device)
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
-        self.joint_pos = self.robot.data.joint_pos
-        self.joint_vel = self.robot.data.joint_vel
-
         time_out = self.episode_length_buf >= self.max_episode_length - 1
-        out_of_bounds = torch.any(torch.abs(self.joint_pos[:, self._cart_dof_idx]) > self.cfg.max_cart_pos, dim=1)
-        out_of_bounds = out_of_bounds | torch.any(torch.abs(self.joint_pos[:, self._pole_dof_idx]) > math.pi / 2, dim=1)
-        return out_of_bounds, time_out
+        if self.cfg.early_termination:
+            died = self.robot.data.body_pos_w[:, self.ref_body_index, 2] < self.cfg.termination_height
+        else:
+            died = torch.zeros_like(time_out)
+        return died, time_out
 
-    def _reset_idx(self, env_ids: Sequence[int] | None):
-        if env_ids is None:
+    def _reset_idx(self, env_ids: torch.Tensor | None):
+        if env_ids is None or len(env_ids) == self.num_envs:
             env_ids = self.robot._ALL_INDICES
+        self.robot.reset(env_ids)
         super()._reset_idx(env_ids)
 
-        joint_pos = self.robot.data.default_joint_pos[env_ids]
-        joint_pos[:, self._pole_dof_idx] += sample_uniform(
-            self.cfg.initial_pole_angle_range[0] * math.pi,
-            self.cfg.initial_pole_angle_range[1] * math.pi,
-            joint_pos[:, self._pole_dof_idx].shape,
-            joint_pos.device,
-        )
-        joint_vel = self.robot.data.default_joint_vel[env_ids]
+        if self.cfg.reset_strategy == "default":
+            root_state, joint_pos, joint_vel = self._reset_strategy_default(env_ids)
+        elif self.cfg.reset_strategy.startswith("random"):
+            start = "start" in self.cfg.reset_strategy
+            root_state, joint_pos, joint_vel = self._reset_strategy_random(env_ids, start)
+        else:
+            raise ValueError(f"Unknown reset strategy: {self.cfg.reset_strategy}")
 
-        default_root_state = self.robot.data.default_root_state[env_ids]
-        default_root_state[:, :3] += self.scene.env_origins[env_ids]
-
-        self.joint_pos[env_ids] = joint_pos
-        self.joint_vel[env_ids] = joint_vel
-
-        self.robot.write_root_pose_to_sim(default_root_state[:, :7], env_ids)
-        self.robot.write_root_velocity_to_sim(default_root_state[:, 7:], env_ids)
+        self.robot.write_root_link_pose_to_sim(root_state[:, :7], env_ids)
+        self.robot.write_root_com_velocity_to_sim(root_state[:, 7:], env_ids)
         self.robot.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
+
+    # reset strategies
+
+    def _reset_strategy_default(self, env_ids: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        root_state = self.robot.data.default_root_state[env_ids].clone()
+        root_state[:, :3] += self.scene.env_origins[env_ids]
+        joint_pos = self.robot.data.default_joint_pos[env_ids].clone()
+        joint_vel = self.robot.data.default_joint_vel[env_ids].clone()
+        return root_state, joint_pos, joint_vel
+
+    def _reset_strategy_random(
+        self, env_ids: torch.Tensor, start: bool = False
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        # sample random motion times (or zeros if start is True)
+        num_samples = env_ids.shape[0]
+        times = np.zeros(num_samples) if start else self._motion_loader.sample_times(num_samples)
+        # sample random motions
+        (
+            dof_positions,
+            dof_velocities,
+            body_positions,
+            body_rotations,
+            body_linear_velocities,
+            body_angular_velocities,
+        ) = self._motion_loader.sample(num_samples=num_samples, times=times)
+
+        # get root transforms (the humanoid torso)
+        motion_torso_index = self._motion_loader.get_body_index(["torso"])[0]
+        root_state = self.robot.data.default_root_state[env_ids].clone()
+        root_state[:, 0:3] = body_positions[:, motion_torso_index] + self.scene.env_origins[env_ids]
+        root_state[:, 2] += 0.15  # lift the humanoid slightly to avoid collisions with the ground
+        root_state[:, 3:7] = body_rotations[:, motion_torso_index]
+        root_state[:, 7:10] = body_linear_velocities[:, motion_torso_index]
+        root_state[:, 10:13] = body_angular_velocities[:, motion_torso_index]
+        # get DOFs state
+        dof_pos = dof_positions[:, self.motion_dof_indexes]
+        dof_vel = dof_velocities[:, self.motion_dof_indexes]
+
+        # update AMP observation
+        amp_observations = self.collect_reference_motions(num_samples, times)
+        self.amp_observation_buffer[env_ids] = amp_observations.view(num_samples, self.cfg.num_amp_observations, -1)
+
+        return root_state, dof_pos, dof_vel
+
+    # env methods
+
+    def collect_reference_motions(self, num_samples: int, current_times: np.ndarray | None = None) -> torch.Tensor:
+        # sample random motion times (or use the one specified)
+        if current_times is None:
+            current_times = self._motion_loader.sample_times(num_samples)
+        times = (
+            np.expand_dims(current_times, axis=-1)
+            - self._motion_loader.dt * np.arange(0, self.cfg.num_amp_observations)
+        ).flatten()
+        # get motions
+        (
+            dof_positions,
+            dof_velocities,
+            body_positions,
+            body_rotations,
+            body_linear_velocities,
+            body_angular_velocities,
+        ) = self._motion_loader.sample(num_samples=num_samples, times=times)
+        # compute AMP observation
+        amp_observation = compute_obs(
+            dof_positions[:, self.motion_dof_indexes],
+            dof_velocities[:, self.motion_dof_indexes],
+            body_positions[:, self.motion_ref_body_index],
+            body_rotations[:, self.motion_ref_body_index],
+            body_linear_velocities[:, self.motion_ref_body_index],
+            body_angular_velocities[:, self.motion_ref_body_index],
+            body_positions[:, self.motion_key_body_indexes],
+        )
+        return amp_observation.view(-1, self.amp_observation_size)
 
 
 @torch.jit.script
-def compute_rewards(
-    rew_scale_alive: float,
-    rew_scale_terminated: float,
-    rew_scale_pole_pos: float,
-    rew_scale_cart_vel: float,
-    rew_scale_pole_vel: float,
-    pole_pos: torch.Tensor,
-    pole_vel: torch.Tensor,
-    cart_pos: torch.Tensor,
-    cart_vel: torch.Tensor,
-    reset_terminated: torch.Tensor,
-):
-    rew_alive = rew_scale_alive * (1.0 - reset_terminated.float())
-    rew_termination = rew_scale_terminated * reset_terminated.float()
-    rew_pole_pos = rew_scale_pole_pos * torch.sum(torch.square(pole_pos).unsqueeze(dim=1), dim=-1)
-    rew_cart_vel = rew_scale_cart_vel * torch.sum(torch.abs(cart_vel).unsqueeze(dim=1), dim=-1)
-    rew_pole_vel = rew_scale_pole_vel * torch.sum(torch.abs(pole_vel).unsqueeze(dim=1), dim=-1)
-    total_reward = rew_alive + rew_termination + rew_pole_pos + rew_cart_vel + rew_pole_vel
-    return total_reward
+def quaternion_to_tangent_and_normal(q: torch.Tensor) -> torch.Tensor:
+    ref_tangent = torch.zeros_like(q[..., :3])
+    ref_normal = torch.zeros_like(q[..., :3])
+    ref_tangent[..., 0] = 1
+    ref_normal[..., -1] = 1
+    tangent = quat_rotate(q, ref_tangent)
+    normal = quat_rotate(q, ref_normal)
+    return torch.cat([tangent, normal], dim=len(tangent.shape) - 1)
+
+
+@torch.jit.script
+def compute_obs(
+    dof_positions: torch.Tensor,
+    dof_velocities: torch.Tensor,
+    root_positions: torch.Tensor,
+    root_rotations: torch.Tensor,
+    root_linear_velocities: torch.Tensor,
+    root_angular_velocities: torch.Tensor,
+    key_body_positions: torch.Tensor,
+) -> torch.Tensor:
+    obs = torch.cat(
+        (
+            dof_positions,
+            dof_velocities,
+            root_positions[:, 2:3],  # root body height
+            quaternion_to_tangent_and_normal(root_rotations),
+            root_linear_velocities,
+            root_angular_velocities,
+            (key_body_positions - root_positions.unsqueeze(-2)).view(key_body_positions.shape[0], -1),
+        ),
+        dim=-1,
+    )
+    return obs

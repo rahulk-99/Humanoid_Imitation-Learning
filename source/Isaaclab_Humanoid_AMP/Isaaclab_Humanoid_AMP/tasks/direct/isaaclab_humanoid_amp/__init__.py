@@ -13,7 +13,7 @@ from . import agents
 
 
 gym.register(
-    id="Template-Isaaclab-Humanoid-Amp-Direct-v0",
+    id="Template-Isaaclab-Humanoid-Amp",
     entry_point=f"{__name__}.isaaclab_humanoid_amp_env:IsaaclabHumanoidAmpEnv",
     disable_env_checker=True,
     kwargs={
