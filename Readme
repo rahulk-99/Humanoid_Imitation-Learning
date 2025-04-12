@@ -1,0 +1,20 @@
+Humanoid development PPO:
+
+Go to: /home/rahulk99/Desktop/Humanoid/Isaaclab_Humanoid_PPO/Isaaclab_Humanoid_PPO
+
+
+To run train command:
+
+/home/rahulk99/IsaacLab/isaaclab.sh -p scripts/skrl/train.py --task Isaaclab-Humanoid-Ppo-v0
+
+
+
+
+
+
+
+Setup code if hosted on Github:
+go to location where setup.py exists:
+cd /home/rahulk99/Desktop/Humanoid/Isaaclab_Humanoid_PPO/Isaaclab_Humanoid_PPO/source/Isaaclab_Humanoid_PPO/
+
+python -m pip install -e .
