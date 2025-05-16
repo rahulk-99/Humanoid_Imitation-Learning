@@ -7,32 +7,7 @@ This repository contains an implementation of humanoid forward walking using two
 
 Both methods are implemented in **NVIDIA Isaac Lab** using **Isaac Sim 4.5.0**, and utilize the `skrl` library for training and policy management. AMP integrates a discriminator trained on MoCap data to encourage realistic, human-like walking behavior.
 
----
 
-## 📁 Repository Structure
-
-```
-Isaaclab_Humanoid_AMP/
-│
-├── Isaaclab_Humanoid_PPO/
-│   └── source/
-│       └── Isaaclab_Humanoid_PPO/
-│           ├── setup.py
-│           └── scripts/skrl/train.py
-│           └── scripts/skrl/play.py
-│
-├── Isaaclab_Humanoid_AMP/
-│   └── source/
-│       └── Isaaclab_Humanoid_AMP/
-│           ├── setup.py
-│           └── scripts/skrl/train.py
-│           └── scripts/skrl/play.py
-│
-├── videos/  ← (optional) demo videos  
-├── README.md
-```
-
----
 
 ## ⚙️ Requirements
 
@@ -96,33 +71,7 @@ directory_of_isaaclab/IsaacLab/isaaclab.sh -p scripts/skrl/play.py --task Isaacl
 ## 🎥 Demo Videos
 
 Watch training and deployment results for both PPO and AMP:  
-👉 **[Click here for video demos](https://drive.google.com/your-drive-link-here)**
-
----
-
-## ✍️ Author
-
-**Rahul Kumar**  
-University of Maryland, College Park  
-📧 [rahulk99@umd.edu](mailto:rahulk99@umd.edu)  
-🔗 [LinkedIn](https://www.linkedin.com/in/rahulk99)
-
----
-
-## 📜 Citation
-
-If you find this work useful, feel free to cite:
-
-```bibtex
-@misc{rahul2025humanoidamp,
-  author = {Rahul Kumar},
-  title = {Humanoid Motion Control using AMP and PPO in Isaac Lab},
-  year = {2025},
-  howpublished = {GitHub},
-  url = {https://github.com/rahulk-99/Humanoid_Imitation-Learning}
-}
-```
-
+👉 https://drive.google.com/drive/folders/1mjZulmTVyDSPIY69y5We2k_9D7ybqWqy
 ---
 
 ## 📌 Acknowledgements
