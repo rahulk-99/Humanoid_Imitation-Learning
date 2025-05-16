@@ -1,5 +1,5 @@
 
-# 🤖 Humanoid Walking using Adversarial Imitation Learning (AMP) and PPO in Isaac Lab
+# Humanoid Walking using Adversarial Imitation Learning (AMP) and PPO in Isaac Lab
 
 This repository contains an implementation of humanoid forward walking using two learning-based approaches:
 
