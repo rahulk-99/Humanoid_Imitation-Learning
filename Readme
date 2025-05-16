@@ -1,1 +1,133 @@
-#Humanoid development PPO vs Adversarial Imitation Learning:
+
+# 🤖 Humanoid Walking using Adversarial Imitation Learning (AMP) and PPO in Isaac Lab
+
+This repository contains an implementation of humanoid forward walking using two learning-based approaches:
+
+- **Proximal Policy Optimization (PPO)** – Reinforcement Learning from scratch using task rewards  
+- **Adversarial Motion Priors (AMP)** – Imitation Learning using expert motion capture data
+
+Both methods are implemented in **NVIDIA Isaac Lab** using **Isaac Sim 4.5.0**, and utilize the `skrl` library for training and policy management. AMP integrates a discriminator trained on MoCap data to encourage realistic, human-like walking behavior.
+
+---
+
+## 📁 Repository Structure
+
+```
+Isaaclab_Humanoid_AMP/
+│
+├── Isaaclab_Humanoid_PPO/
+│   └── source/
+│       └── Isaaclab_Humanoid_PPO/
+│           ├── setup.py
+│           └── scripts/skrl/train.py
+│           └── scripts/skrl/play.py
+│
+├── Isaaclab_Humanoid_AMP/
+│   └── source/
+│       └── Isaaclab_Humanoid_AMP/
+│           ├── setup.py
+│           └── scripts/skrl/train.py
+│           └── scripts/skrl/play.py
+│
+├── videos/  ← (optional) demo videos  
+├── README.md
+```
+
+---
+
+## ⚙️ Requirements
+
+- [Isaac Sim 4.5.0](https://developer.nvidia.com/isaac-sim) (via Omniverse launcher)
+- [Isaac Lab 2.1.0](https://github.com/NVIDIA-Omniverse/IsaacLab)
+- Python 3.10
+- NVIDIA GPU (tested on RTX 4070)
+
+Follow the [Isaac Lab pip installation guide](https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/isaaclab_pip_installation.html) to complete environment setup.
+
+---
+
+## 🚀 How to Run
+
+> Replace `directory_of_isaaclab` with your actual path to IsaacLab installation
+
+### 🟦 PPO (Reinforcement Learning)
+
+**1. Navigate to PPO project:**
+
+```bash
+cd Isaaclab_Humanoid_AMP/Isaaclab_Humanoid_PPO/source/Isaaclab_Humanoid_PPO/
+```
+
+**2. Train PPO policy:**
+
+```bash
+directory_of_isaaclab/IsaacLab/isaaclab.sh -p scripts/skrl/train.py --task Isaaclab-Humanoid-Ppo-v0
+```
+
+**3. Run trained policy:**
+
+```bash
+directory_of_isaaclab/IsaacLab/isaaclab.sh -p scripts/skrl/play.py --task Isaaclab-Humanoid-Ppo-v0
+```
+
+---
+
+### 🟩 AMP (Adversarial Imitation Learning)
+
+**1. Navigate to AMP project:**
+
+```bash
+cd Isaaclab_Humanoid_AMP/Isaaclab_Humanoid_AMP/source/Isaaclab_Humanoid_AMP/
+```
+
+**2. Train AMP policy:**
+
+```bash
+directory_of_isaaclab/IsaacLab/isaaclab.sh -p scripts/skrl/train.py --task Isaaclab-Humanoid-Ppo-v0 --algorithm AMP
+```
+
+**3. Run trained AMP policy:**
+
+```bash
+directory_of_isaaclab/IsaacLab/isaaclab.sh -p scripts/skrl/play.py --task Isaaclab-Humanoid-Ppo-v0 --algorithm AMP
+```
+
+---
+
+## 🎥 Demo Videos
+
+Watch training and deployment results for both PPO and AMP:  
+👉 **[Click here for video demos](https://drive.google.com/your-drive-link-here)**
+
+---
+
+## ✍️ Author
+
+**Rahul Kumar**  
+University of Maryland, College Park  
+📧 [rahulk99@umd.edu](mailto:rahulk99@umd.edu)  
+🔗 [LinkedIn](https://www.linkedin.com/in/rahulk99)
+
+---
+
+## 📜 Citation
+
+If you find this work useful, feel free to cite:
+
+```bibtex
+@misc{rahul2025humanoidamp,
+  author = {Rahul Kumar},
+  title = {Humanoid Motion Control using AMP and PPO in Isaac Lab},
+  year = {2025},
+  howpublished = {GitHub},
+  url = {https://github.com/rahulk-99/Humanoid_Imitation-Learning}
+}
+```
+
+---
+
+## 📌 Acknowledgements
+
+- NVIDIA Isaac Sim and Isaac Lab teams  
+- AMP authors: Peng et al., 2021  
+- Open-source contributors of `skrl`, PyTorch, and IsaacLab community  
